@@ -7,3 +7,10 @@ dist/
 build/
 .coverage
 .pytest_cache/
+
+.idea/
+.env
+.env.*
+!.env.example
+project-export-*.csv
+assignee-map.json

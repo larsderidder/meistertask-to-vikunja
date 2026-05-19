@@ -34,7 +34,9 @@ Optional flags:
 - `--skip-checklists` or `--skip-labels`
 - `--assignee-map /path/to/map.json` to map assignee names to Vikunja user IDs
 - `--write-assignee-map /path/to/map.json` to write a template map from a CSV export
-- `--purge-project --purge-confirm YES` to delete existing tasks before import
+- `--purge-project --purge-confirm YES` to delete existing tasks before import (purges all tasks in the project)
+- `--verify-task-counts` to count tasks via the API after import and compare totals
+- `--verify-only --verify-project-id <id>` to only verify task counts without importing
 
 Assignee map JSON format:
 
@@ -51,6 +53,15 @@ Generate a template assignee map from a CSV export:
 meistertask-to-vikunja \
   --input /path/to/project-export.csv \
   --write-assignee-map ./assignee-map.json
+
+Verify task counts without importing (optionally compare to a CSV/JSON export):
+
+```bash
+meistertask-to-vikunja \
+  --verify-only \
+  --verify-project-id 123 \
+  --input /path/to/project-export.csv
+```
 ```
 
 Assignee mapping uses display names from the CSV export. JSON exports do not include assignee IDs,

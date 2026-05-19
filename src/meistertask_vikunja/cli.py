@@ -170,6 +170,7 @@ class Config:
     purge_project: bool
     purge_confirm: Optional[str]
     limit_tasks: Optional[int]
+    verify_task_counts: bool
 
 
 class VikunjaClient:
@@ -391,6 +392,97 @@ class VikunjaClient:
             page += 1
         return tasks
 
+    def list_tasks_for_project(self, project_id: int) -> List[Dict[str, Any]]:
+        tasks: List[Dict[str, Any]] = []
+        page = 1
+        per_page = 100
+        filter_expr = f"project_id = {project_id}"
+        while True:
+            data, headers = self._request_raw(
+                "GET",
+                "/tasks/all",
+                params={"page": page, "per_page": per_page, "filter": filter_expr},
+            )
+            if not data:
+                break
+            if isinstance(data, list):
+                tasks.extend(data)
+            total_pages = int(
+                headers.get("X-Pagination-Total-Pages", headers.get("x-pagination-total-pages", 1))
+                or 1
+            )
+            if page >= total_pages:
+                break
+            page += 1
+        return tasks
+
+    def _count_tasks_via(
+        self, path: str, params_base: Optional[Dict[str, Any]] = None
+    ) -> Tuple[int, bool]:
+        total = 0
+        seen_ids: set[int] = set()
+        page = 1
+        per_page = 100
+        request_made = False
+        while True:
+            params = dict(params_base or {})
+            params.update({"page": page, "per_page": per_page})
+            data, headers = self._request_raw("GET", path, params=params)
+            request_made = True
+            if not data:
+                break
+            page_tasks: List[Dict[str, Any]] = []
+            if isinstance(data, list):
+                if data and isinstance(data[0], dict) and "tasks" in data[0]:
+                    for bucket in data:
+                        page_tasks.extend(bucket.get("tasks") or [])
+                else:
+                    page_tasks = data
+            elif isinstance(data, dict):
+                if isinstance(data.get("tasks"), list):
+                    page_tasks = data["tasks"]
+            new_seen = 0
+            for task in page_tasks:
+                task_id = task.get("id") if isinstance(task, dict) else None
+                if task_id is not None:
+                    if task_id not in seen_ids:
+                        seen_ids.add(int(task_id))
+                        new_seen += 1
+                else:
+                    total += 1
+                    new_seen += 1
+            if seen_ids:
+                total = len(seen_ids)
+            total_pages = int(
+                headers.get("X-Pagination-Total-Pages", headers.get("x-pagination-total-pages", 0)) or 0
+            )
+            if total_pages:
+                if page >= total_pages:
+                    break
+                page += 1
+                continue
+            if len(page_tasks) < per_page or new_seen == 0:
+                break
+            page += 1
+        return total, request_made
+
+    def count_tasks_for_project(self, project_id: int) -> int:
+        last_exc: Optional[Exception] = None
+        try:
+            param_key = "project_id" if self.project_resource == "projects" else "list_id"
+            total, _ = self._count_tasks_via("/tasks", {param_key: project_id})
+            return total
+        except VikunjaHTTPError as exc:
+            last_exc = exc
+        try:
+            total, _ = self._count_tasks_via(f"/{self.project_resource}/{project_id}/tasks")
+            return total
+        except VikunjaHTTPError as exc:
+            last_exc = exc
+        if last_exc:
+            raise last_exc
+        return 0
+
     def delete_task(self, task_id: int) -> None:
         self._request("DELETE", f"/tasks/{task_id}")
 
@@ -498,16 +590,21 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
         if cfg.purge_confirm != "YES":
             raise RuntimeError("Refusing to purge project without --purge-confirm YES.")
         print(f"Purging tasks and buckets in project {project_id}...")
-        list_view_id = safe_call(
-            f"fetch list view for project {project_id}",
-            lambda: client.get_list_view_id(project_id),
-        )
-        if list_view_id is None:
-            raise RuntimeError("No project view found; cannot purge tasks.")
         tasks_to_delete = safe_call(
             f"list tasks for project {project_id}",
-            lambda: client.list_tasks_in_view(project_id, list_view_id),
-        ) or []
+            lambda: client.list_tasks_for_project(project_id),
+        )
+        if tasks_to_delete is None:
+            list_view_id = safe_call(
+                f"fetch list view for project {project_id}",
+                lambda: client.get_list_view_id(project_id),
+            )
+            if list_view_id is None:
+                raise RuntimeError("No project view found; cannot purge tasks.")
+            tasks_to_delete = safe_call(
+                f"list tasks for project {project_id}",
+                lambda: client.list_tasks_in_view(project_id, list_view_id),
+            ) or []
         print(f"Deleting {len(tasks_to_delete)} tasks...")
         for task in tasks_to_delete:
             task_id = task.get("id")
@@ -705,10 +802,23 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
                     ),
                 )
 
+    if cfg.verify_task_counts and not cfg.dry_run:
+        expected = len(tasks)
+        print(f"Verifying task count in project {project_id}...")
+        actual = safe_call(
+            f"count tasks for project {project_id}",
+            lambda: client.count_tasks_for_project(project_id),
+        )
+        if actual is not None:
+            if actual == expected:
+                print(f"Task count OK: {actual} tasks.")
+            else:
+                print(f"Task count mismatch: expected {expected}, API returned {actual}.")
+
 
 def _parse_args(argv: List[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Import Meistertask export into Vikunja.")
-    parser.add_argument("--input", required=True, help="Path to Meistertask export (.zip or .json).")
+    parser.add_argument("--input", help="Path to Meistertask export (.zip or .json).")
     parser.add_argument("--base-url", help="Vikunja base URL, e.g. https://vikunja.example.com.")
     parser.add_argument("--token", help="Vikunja API token (JWT).")
     parser.add_argument("--env-file", default=".env", help="Path to .env file for VIKUNJA_API_TOKEN.")
@@ -728,6 +838,21 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument("--purge-project", action="store_true", help="Delete all tasks in the target project before import.")
     parser.add_argument("--purge-confirm", help="Set to YES to confirm purge.")
     parser.add_argument("--limit-tasks", type=int, help="Only import the first N tasks.")
+    parser.add_argument(
+        "--verify-task-counts",
+        action="store_true",
+        help="Count tasks via the API after import and compare to imported total.",
+    )
+    parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="Only verify task counts for a project; optionally compare to --input export.",
+    )
+    parser.add_argument(
+        "--verify-project-id",
+        type=int,
+        help="Project ID to verify when using --verify-only.",
+    )
     return parser.parse_args(argv)
 
 
@@ -738,9 +863,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     token = args.token or os.environ.get("VIKUNJA_API_TOKEN")
     base_url = args.base_url or os.environ.get("VIKUNJA_BASE_URL")
     if args.write_assignee_map:
+        if not args.input:
+            print("Error: --input is required for --write-assignee-map.", file=sys.stderr)
+            return 1
         _write_assignee_map_template(Path(args.input), Path(args.write_assignee_map))
         print(f"Wrote assignee map template to {args.write_assignee_map}")
         return 0
+    if args.verify_only:
+        verify_project_id = args.verify_project_id or args.project_id
+        if not verify_project_id:
+            print("Error: --verify-only requires --project-id or --verify-project-id.", file=sys.stderr)
+            return 1
     if (not token or not base_url) and args.env_file:
         env_path = Path(args.env_file)
         if env_path.exists():
@@ -776,8 +909,33 @@ def main(argv: Optional[List[str]] = None) -> int:
         purge_project=args.purge_project,
         purge_confirm=args.purge_confirm,
         limit_tasks=args.limit_tasks,
+        verify_task_counts=args.verify_task_counts,
     )
     try:
+        if args.verify_only:
+            client = VikunjaClient(cfg)
+            project_id = args.verify_project_id or args.project_id
+            if not project_id:
+                raise RuntimeError("No project ID provided for verification.")
+            expected: Optional[int] = None
+            if args.input:
+                export = _load_export(Path(args.input))
+                tasks = _sorted_by_sequence(export.get("tasks") or [])
+                if cfg.limit_tasks:
+                    tasks = tasks[: cfg.limit_tasks]
+                expected = len(tasks)
+            print(f"Verifying task count in project {project_id}...")
+            total = client.count_tasks_for_project(int(project_id))
+            if expected is None:
+                print(f"Project {project_id} task count: {total}")
+            elif expected == total:
+                print(f"Task count OK: {total} tasks.")
+            else:
+                print(f"Task count mismatch: expected {expected}, API returned {total}.")
+            return 0
+        if not args.input:
+            print("Error: --input is required unless using --verify-only.", file=sys.stderr)
+            return 1
         export = _load_export(Path(args.input))
         import_to_vikunja(export, cfg)
     except Exception as exc:  # noqa: BLE001 - CLI should report any failure.
