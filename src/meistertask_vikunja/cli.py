@@ -171,6 +171,7 @@ class Config:
     purge_confirm: Optional[str]
     limit_tasks: Optional[int]
     verify_task_counts: bool
+    request_timeout: float
 
 
 class VikunjaClient:
@@ -192,7 +193,9 @@ class VikunjaClient:
     def _url(self, path: str) -> str:
         return f"{self.cfg.base_url.rstrip('/')}/api/v1{path}"
 
-    def _request(self, method: str, path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _request(
+        self, method: str, path: str, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         if self.cfg.dry_run:
             print(f"DRY RUN {method} {path} payload={payload}")
             return {}
@@ -204,6 +207,7 @@ class VikunjaClient:
             url,
             json=payload,
             verify=self.cfg.verify_ssl,
+            timeout=self.cfg.request_timeout,
         )
         if self.cfg.debug_http:
             print(f"HTTP {resp.status_code} {url}")
@@ -234,6 +238,7 @@ class VikunjaClient:
             json=payload,
             params=params,
             verify=self.cfg.verify_ssl,
+            timeout=self.cfg.request_timeout,
         )
         if self.cfg.debug_http:
             print(f"HTTP {resp.status_code} {url}")
@@ -281,13 +286,18 @@ class VikunjaClient:
         return int(data.get("id", 0))
 
     def list_buckets(self, project_id: int, view_id: int) -> List[Dict[str, Any]]:
-        data = self._request("GET", f"/{self.project_resource}/{project_id}/views/{view_id}/buckets")
+        data = self._request(
+            "GET", f"/{self.project_resource}/{project_id}/views/{view_id}/buckets"
+        )
         if isinstance(data, list):
             return data
         return []
 
     def delete_bucket(self, project_id: int, view_id: int, bucket_id: int) -> None:
-        self._request("DELETE", f"/{self.project_resource}/{project_id}/views/{view_id}/buckets/{bucket_id}")
+        self._request(
+            "DELETE",
+            f"/{self.project_resource}/{project_id}/views/{view_id}/buckets/{bucket_id}",
+        )
 
     def create_label(self, title: str, color: Optional[str]) -> int:
         payload: Dict[str, Any] = {"title": title}
@@ -303,7 +313,9 @@ class VikunjaClient:
         return []
 
     def create_task(self, project_id: int, payload: Dict[str, Any]) -> int:
-        data = self._request("PUT", f"/{self.project_resource}/{project_id}/tasks", payload)
+        data = self._request(
+            "PUT", f"/{self.project_resource}/{project_id}/tasks", payload
+        )
         return int(data.get("id", 0))
 
     def add_label_to_task(self, task_id: int, label_id: int) -> None:
@@ -323,7 +335,9 @@ class VikunjaClient:
         data = self._request("POST", f"/tasks/{task_id}/checklists", payload)
         return int(data.get("id", 0))
 
-    def create_checklist_item(self, task_id: int, checklist_id: int, title: str, done: bool) -> None:
+    def create_checklist_item(
+        self, task_id: int, checklist_id: int, title: str, done: bool
+    ) -> None:
         payload = {"title": title, "done": done}
         self._request(
             "POST",
@@ -378,13 +392,21 @@ class VikunjaClient:
             )
             if not data:
                 break
-            if isinstance(data, list) and data and isinstance(data[0], dict) and "tasks" in data[0]:
+            if (
+                isinstance(data, list)
+                and data
+                and isinstance(data[0], dict)
+                and "tasks" in data[0]
+            ):
                 for bucket in data:
                     tasks.extend(bucket.get("tasks") or [])
             elif isinstance(data, list):
                 tasks.extend(data)
             total_pages = int(
-                headers.get("X-Pagination-Total-Pages", headers.get("x-pagination-total-pages", 1))
+                headers.get(
+                    "X-Pagination-Total-Pages",
+                    headers.get("x-pagination-total-pages", 1),
+                )
                 or 1
             )
             if page >= total_pages:
@@ -408,7 +430,10 @@ class VikunjaClient:
             if isinstance(data, list):
                 tasks.extend(data)
             total_pages = int(
-                headers.get("X-Pagination-Total-Pages", headers.get("x-pagination-total-pages", 1))
+                headers.get(
+                    "X-Pagination-Total-Pages",
+                    headers.get("x-pagination-total-pages", 1),
+                )
                 or 1
             )
             if page >= total_pages:
@@ -454,7 +479,11 @@ class VikunjaClient:
             if seen_ids:
                 total = len(seen_ids)
             total_pages = int(
-                headers.get("X-Pagination-Total-Pages", headers.get("x-pagination-total-pages", 0)) or 0
+                headers.get(
+                    "X-Pagination-Total-Pages",
+                    headers.get("x-pagination-total-pages", 0),
+                )
+                or 0
             )
             if total_pages:
                 if page >= total_pages:
@@ -469,13 +498,17 @@ class VikunjaClient:
     def count_tasks_for_project(self, project_id: int) -> int:
         last_exc: Optional[Exception] = None
         try:
-            param_key = "project_id" if self.project_resource == "projects" else "list_id"
+            param_key = (
+                "project_id" if self.project_resource == "projects" else "list_id"
+            )
             total, _ = self._count_tasks_via("/tasks", {param_key: project_id})
             return total
         except VikunjaHTTPError as exc:
             last_exc = exc
         try:
-            total, _ = self._count_tasks_via(f"/{self.project_resource}/{project_id}/tasks")
+            total, _ = self._count_tasks_via(
+                f"/{self.project_resource}/{project_id}/tasks"
+            )
             return total
         except VikunjaHTTPError as exc:
             last_exc = exc
@@ -517,7 +550,9 @@ def _color_from_title(title: str) -> str:
 
 
 def _sorted_by_sequence(items: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return sorted(items, key=lambda x: (x.get("sequence") is None, x.get("sequence", 0)))
+    return sorted(
+        items, key=lambda x: (x.get("sequence") is None, x.get("sequence", 0))
+    )
 
 
 def _status_done(status: Optional[int]) -> bool:
@@ -551,7 +586,9 @@ def _write_assignee_map_template(input_path: Path, output_path: Path) -> None:
     if input_path.suffix.lower() != ".csv":
         raise ValueError("Assignee map template generation only supports CSV exports.")
     rows = _read_csv_rows(input_path)
-    assignees = sorted({(row.get("assignee") or "").strip() for row in rows if row.get("assignee")})
+    assignees = sorted(
+        {(row.get("assignee") or "").strip() for row in rows if row.get("assignee")}
+    )
     template = {name: None for name in assignees}
     output_path.write_text(json.dumps(template, indent=2, sort_keys=True))
 
@@ -601,10 +638,13 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
             )
             if list_view_id is None:
                 raise RuntimeError("No project view found; cannot purge tasks.")
-            tasks_to_delete = safe_call(
-                f"list tasks for project {project_id}",
-                lambda: client.list_tasks_in_view(project_id, list_view_id),
-            ) or []
+            tasks_to_delete = (
+                safe_call(
+                    f"list tasks for project {project_id}",
+                    lambda: client.list_tasks_in_view(project_id, list_view_id),
+                )
+                or []
+            )
         print(f"Deleting {len(tasks_to_delete)} tasks...")
         for task in tasks_to_delete:
             task_id = task.get("id")
@@ -620,10 +660,13 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
             lambda: client.get_kanban_view_id(project_id),
         )
         if kanban_view_id is not None:
-            buckets = safe_call(
-                f"list buckets for project {project_id} view {kanban_view_id}",
-                lambda: client.list_buckets(project_id, kanban_view_id),
-            ) or []
+            buckets = (
+                safe_call(
+                    f"list buckets for project {project_id} view {kanban_view_id}",
+                    lambda: client.list_buckets(project_id, kanban_view_id),
+                )
+                or []
+            )
             if not buckets:
                 print("No buckets to delete.")
                 return
@@ -636,7 +679,9 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
                     continue
                 safe_call(
                     f"delete bucket {bucket_id}",
-                    lambda bid=bucket_id: client.delete_bucket(project_id, kanban_view_id, int(bid)),
+                    lambda bid=bucket_id: client.delete_bucket(
+                        project_id, kanban_view_id, int(bid)
+                    ),
                 )
 
     # Create buckets from sections.
@@ -652,11 +697,16 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
             print("No kanban view found; skipping buckets.")
     if view_id is not None:
         print(f"Creating {len(export['sections'])} buckets...")
-        existing_buckets = safe_call(
-            f"list buckets for project {project_id} view {view_id}",
-            lambda: client.list_buckets(project_id, view_id),
-        ) or []
-        existing_by_title = {str(b.get("title", "")).strip().lower(): b for b in existing_buckets}
+        existing_buckets = (
+            safe_call(
+                f"list buckets for project {project_id} view {view_id}",
+                lambda: client.list_buckets(project_id, view_id),
+            )
+            or []
+        )
+        existing_by_title = {
+            str(b.get("title", "")).strip().lower(): b for b in existing_buckets
+        }
         for section in _sorted_by_sequence(export["sections"]):
             bucket_title = str(section.get("name") or "").strip()
             bucket_key = bucket_title.lower()
@@ -677,14 +727,20 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
             if bucket_id:
                 buckets_by_section[section["hashid"]] = bucket_id
                 if not existing:
-                    existing_by_title[bucket_key] = {"id": bucket_id, "title": bucket_title}
+                    existing_by_title[bucket_key] = {
+                        "id": bucket_id,
+                        "title": bucket_title,
+                    }
 
     # Create labels.
     labels_by_hash: Dict[str, int] = {}
     if not cfg.skip_labels:
         print(f"Creating {len(export['labels'])} labels...")
         existing_labels = safe_call("list labels", client.list_labels) or []
-        existing_by_title = {str(l.get("title", "")).strip().lower(): l for l in existing_labels}
+        existing_by_title = {
+            str(existing_label.get("title", "")).strip().lower(): existing_label
+            for existing_label in existing_labels
+        }
         for label in export["labels"]:
             label_title = str(label.get("name") or "").strip()
             label_key = label_title.lower()
@@ -692,15 +748,22 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
             if existing:
                 label_id = int(existing.get("id", 0))
             else:
-                color = _normalize_color(label.get("color")) or _color_from_title(label_title)
+                color = _normalize_color(label.get("color")) or _color_from_title(
+                    label_title
+                )
                 label_id = safe_call(
                     f"create label {label_title}",
-                    lambda l=label, c=color: client.create_label(l["name"], c),
+                    lambda current_label=label, c=color: client.create_label(
+                        current_label["name"], c
+                    ),
                 )
             if label_id:
                 labels_by_hash[label["hashid"]] = label_id
                 if not existing:
-                    existing_by_title[label_key] = {"id": label_id, "title": label_title}
+                    existing_by_title[label_key] = {
+                        "id": label_id,
+                        "title": label_title,
+                    }
 
     # Pre-group task labels.
     task_labels: Dict[str, List[str]] = {}
@@ -768,7 +831,9 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
         comments_raw = task.get("comments_raw") or ""
         if comments_raw:
             if cfg.comment_delimiter:
-                comment_parts = [c.strip() for c in comments_raw.split(cfg.comment_delimiter)]
+                comment_parts = [
+                    c.strip() for c in comments_raw.split(cfg.comment_delimiter)
+                ]
                 comment_parts = [c for c in comment_parts if c]
             else:
                 comment_parts = _split_list(comments_raw)
@@ -781,7 +846,9 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
         if cfg.skip_checklists:
             continue
 
-        for checklist in _sorted_by_sequence(checklists_by_task.get(task["hashid"], [])):
+        for checklist in _sorted_by_sequence(
+            checklists_by_task.get(task["hashid"], [])
+        ):
             checklist_id = safe_call(
                 f"create checklist {checklist['name']} for task {task_id}",
                 lambda c=checklist: client.create_checklist(task_id, c["name"]),
@@ -790,7 +857,9 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
                 if cfg.continue_on_error:
                     continue
                 raise RuntimeError("Failed to create checklist (no id returned).")
-            items = _sorted_by_sequence(checklist_items_by_checklist.get(checklist["hashid"], []))
+            items = _sorted_by_sequence(
+                checklist_items_by_checklist.get(checklist["hashid"], [])
+            )
             for item in items:
                 safe_call(
                     f"create checklist item {item['name']} on task {task_id}",
@@ -813,31 +882,67 @@ def import_to_vikunja(export: Dict[str, Any], cfg: Config) -> None:
             if actual == expected:
                 print(f"Task count OK: {actual} tasks.")
             else:
-                print(f"Task count mismatch: expected {expected}, API returned {actual}.")
+                print(
+                    f"Task count mismatch: expected {expected}, API returned {actual}."
+                )
 
 
 def _parse_args(argv: List[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Import Meistertask export into Vikunja.")
+    parser = argparse.ArgumentParser(
+        description="Import Meistertask export into Vikunja."
+    )
     parser.add_argument("--input", help="Path to Meistertask export (.zip or .json).")
-    parser.add_argument("--base-url", help="Vikunja base URL, e.g. https://vikunja.example.com.")
+    parser.add_argument(
+        "--base-url", help="Vikunja base URL, e.g. https://vikunja.example.com."
+    )
     parser.add_argument("--token", help="Vikunja API token (JWT).")
-    parser.add_argument("--env-file", default=".env", help="Path to .env file for VIKUNJA_API_TOKEN.")
-    parser.add_argument("--project-id", type=int, help="Existing Vikunja project ID to import into.")
-    parser.add_argument("--dry-run", action="store_true", help="Print API calls without sending.")
-    parser.add_argument("--insecure", action="store_true", help="Disable TLS verification.")
-    parser.add_argument("--continue-on-error", action="store_true", help="Continue after errors.")
-    parser.add_argument("--skip-checklists", action="store_true", help="Skip checklist import.")
+    parser.add_argument(
+        "--env-file", default=".env", help="Path to .env file for VIKUNJA_API_TOKEN."
+    )
+    parser.add_argument(
+        "--project-id", type=int, help="Existing Vikunja project ID to import into."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print API calls without sending."
+    )
+    parser.add_argument(
+        "--insecure", action="store_true", help="Disable TLS verification."
+    )
+    parser.add_argument(
+        "--continue-on-error", action="store_true", help="Continue after errors."
+    )
+    parser.add_argument(
+        "--skip-checklists", action="store_true", help="Skip checklist import."
+    )
     parser.add_argument("--skip-labels", action="store_true", help="Skip label import.")
-    parser.add_argument("--debug-http", action="store_true", help="Log HTTP requests and responses.")
-    parser.add_argument("--assignee-map", help="Path to JSON file mapping assignee names to user IDs.")
+    parser.add_argument(
+        "--debug-http", action="store_true", help="Log HTTP requests and responses."
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=30,
+        help="HTTP request timeout in seconds.",
+    )
+    parser.add_argument(
+        "--assignee-map", help="Path to JSON file mapping assignee names to user IDs."
+    )
     parser.add_argument(
         "--write-assignee-map",
         help="Write assignee map template JSON from CSV input and exit.",
     )
-    parser.add_argument("--comment-delimiter", help="Delimiter to split comments in CSV.")
-    parser.add_argument("--purge-project", action="store_true", help="Delete all tasks in the target project before import.")
+    parser.add_argument(
+        "--comment-delimiter", help="Delimiter to split comments in CSV."
+    )
+    parser.add_argument(
+        "--purge-project",
+        action="store_true",
+        help="Delete all tasks in the target project before import.",
+    )
     parser.add_argument("--purge-confirm", help="Set to YES to confirm purge.")
-    parser.add_argument("--limit-tasks", type=int, help="Only import the first N tasks.")
+    parser.add_argument(
+        "--limit-tasks", type=int, help="Only import the first N tasks."
+    )
     parser.add_argument(
         "--verify-task-counts",
         action="store_true",
@@ -864,7 +969,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     base_url = args.base_url or os.environ.get("VIKUNJA_BASE_URL")
     if args.write_assignee_map:
         if not args.input:
-            print("Error: --input is required for --write-assignee-map.", file=sys.stderr)
+            print(
+                "Error: --input is required for --write-assignee-map.", file=sys.stderr
+            )
             return 1
         _write_assignee_map_template(Path(args.input), Path(args.write_assignee_map))
         print(f"Wrote assignee map template to {args.write_assignee_map}")
@@ -872,7 +979,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.verify_only:
         verify_project_id = args.verify_project_id or args.project_id
         if not verify_project_id:
-            print("Error: --verify-only requires --project-id or --verify-project-id.", file=sys.stderr)
+            print(
+                "Error: --verify-only requires --project-id or --verify-project-id.",
+                file=sys.stderr,
+            )
             return 1
     if (not token or not base_url) and args.env_file:
         env_path = Path(args.env_file)
@@ -889,7 +999,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 if key == "VIKUNJA_BASE_URL" and not base_url:
                     base_url = value
     if not base_url or not token:
-        print("Error: base URL and token are required (use --base-url/--token or env/.env).", file=sys.stderr)
+        print(
+            "Error: base URL and token are required (use --base-url/--token or env/.env).",
+            file=sys.stderr,
+        )
         return 1
     base_url = base_url.rstrip("/")
     if base_url.endswith("/api/v1"):
@@ -910,6 +1023,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         purge_confirm=args.purge_confirm,
         limit_tasks=args.limit_tasks,
         verify_task_counts=args.verify_task_counts,
+        request_timeout=args.request_timeout,
     )
     try:
         if args.verify_only:
@@ -931,10 +1045,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             elif expected == total:
                 print(f"Task count OK: {total} tasks.")
             else:
-                print(f"Task count mismatch: expected {expected}, API returned {total}.")
+                print(
+                    f"Task count mismatch: expected {expected}, API returned {total}."
+                )
             return 0
         if not args.input:
-            print("Error: --input is required unless using --verify-only.", file=sys.stderr)
+            print(
+                "Error: --input is required unless using --verify-only.",
+                file=sys.stderr,
+            )
             return 1
         export = _load_export(Path(args.input))
         import_to_vikunja(export, cfg)
